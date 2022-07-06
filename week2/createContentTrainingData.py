@@ -1,4 +1,7 @@
 import argparse
+import multiprocessing
+import glob
+from tqdm import tqdm
 import os
 import random
 import xml.etree.ElementTree as ET
@@ -18,7 +21,7 @@ def transform_name(product_name):
     # Remove non-alphanumeric characters other than space, hyphen, or period.
     ret = ''.join(c for c in ret if c.isalpha() or c.isnumeric() or c=='-' or c==' ' or c =='.')
     # Apply Snowball stemmer
-    ret = ' '.join(map(stemmer.stem, ret.split(' ')))
+    # ret = ' '.join(map(stemmer.stem, ret.split(' ')))
     return ret
 
 # Directory for product data
