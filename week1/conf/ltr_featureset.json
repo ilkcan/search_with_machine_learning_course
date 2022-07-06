@@ -16,6 +16,20 @@
         }
       },
       {
+        "name": "name_synonyms_match",
+        "params": [
+          "keywords"
+        ],
+        "template_language": "mustache",
+        "template": {
+          "match": {
+            "name.synonyms": {
+              "query": "{{keywords}}"
+            }
+          }
+        }
+      },
+      {
         "name": "name_phrase_match",
         "params": [
           "keywords"
