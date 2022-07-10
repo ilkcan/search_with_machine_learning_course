@@ -11,11 +11,16 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
-
+import fasttext
+import sys
+import nltk
+stemmer = nltk.stem.PorterStemmer()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-logging.basicConfig(format='%(levelname)s:%(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(message)s')
+
+model = fasttext.load_model("../week3/query_classifier_150k.bin")
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -49,70 +54,103 @@ def create_prior_queries(doc_ids, doc_id_weights,
 
 
 # Hardcoded query here.  Better to use search templates or other query config.
-def create_query(user_query, click_prior_query, filters, sort="_score", sortDir="desc", size=10, source=None):
+def create_query(user_query, click_prior_query, filters, sort="_score", sortDir="desc", size=10, source=None, categories=None, 
+    is_boost=False):
+    query_filters = filters
+    category_boost = {}
+    if query_filters and categories and not is_boost:
+        category_filter = {
+            "terms": {
+                "categoryPathIds.keyword": categories
+            }
+        }
+        query_filters.append(category_filter)
+    elif categories and not is_boost:
+        query_filters = [
+            {
+                "terms": {
+                    "categoryPathIds.keyword": categories
+                }
+            }
+        ]
+    elif categories and is_boost:
+        category_boost = {
+            "terms": {
+                "categoryPathIds.keyword": categories,
+                "boost": 50.0
+            }            
+        }
+
+    should_clauses = [
+        {
+            "match": {
+                "name": {
+                    "query": user_query,
+                    "fuzziness": "1",
+                    "prefix_length": 2,
+                    # short words are often acronyms or usually not misspelled, so don't edit
+                    "boost": 0.01
+                }
+            }
+        },
+        {
+            "match_phrase": {  # near exact phrase match
+                "name.hyphens": {
+                    "query": user_query,
+                    "slop": 1,
+                    "boost": 50
+                }
+            }
+        },
+        {
+            "multi_match": {
+                "query": user_query,
+                "type": "phrase",
+                "slop": "6",
+                "minimum_should_match": "2<75%",
+                "fields": ["name^10", "name.hyphens^10", "shortDescription^5",
+                            "longDescription^5", "department^0.5", "sku", "manufacturer", "features",
+                            "categoryPath"]
+            }
+        },
+        {
+            "terms": {
+                # Lots of SKUs in the query logs, boost by it, split on whitespace so we get a list
+                "sku": user_query.split(),
+                "boost": 50.0
+            }
+        },
+        {  # lots of products have hyphens in them or other weird casing things like iPad
+            "match": {
+                "name.hyphens": {
+                    "query": user_query,
+                    "operator": "OR",
+                    "minimum_should_match": "2<75%"
+                }
+            }
+        }
+    ]
+
+    if category_boost:
+        should_clauses.append(category_boost)
+
     query_obj = {
         'size': size,
         "sort": [
-            {sort: {"order": sortDir}}
+            {
+                sort: {
+                    "order": sortDir
+                }
+            }
         ],
         "query": {
             "function_score": {
                 "query": {
                     "bool": {
-                        "must": [
-
-                        ],
-                        "should": [  #
-                            {
-                                "match": {
-                                    "name": {
-                                        "query": user_query,
-                                        "fuzziness": "1",
-                                        "prefix_length": 2,
-                                        # short words are often acronyms or usually not misspelled, so don't edit
-                                        "boost": 0.01
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {  # near exact phrase match
-                                    "name.hyphens": {
-                                        "query": user_query,
-                                        "slop": 1,
-                                        "boost": 50
-                                    }
-                                }
-                            },
-                            {
-                                "multi_match": {
-                                    "query": user_query,
-                                    "type": "phrase",
-                                    "slop": "6",
-                                    "minimum_should_match": "2<75%",
-                                    "fields": ["name^10", "name.hyphens^10", "shortDescription^5",
-                                               "longDescription^5", "department^0.5", "sku", "manufacturer", "features",
-                                               "categoryPath"]
-                                }
-                            },
-                            {
-                                "terms": {
-                                    # Lots of SKUs in the query logs, boost by it, split on whitespace so we get a list
-                                    "sku": user_query.split(),
-                                    "boost": 50.0
-                                }
-                            },
-                            {  # lots of products have hyphens in them or other weird casing things like iPad
-                                "match": {
-                                    "name.hyphens": {
-                                        "query": user_query,
-                                        "operator": "OR",
-                                        "minimum_should_match": "2<75%"
-                                    }
-                                }
-                            }
-                        ],
+                        "must": [],
+                        "should": should_clauses,
                         "minimum_should_match": 1,
-                        "filter": filters  #
+                        "filter": query_filters  #
                     }
                 },
                 "boost_mode": "multiply",  # how _score and functions are combined
@@ -186,11 +224,36 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
     return query_obj
 
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc"):
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", is_boost=False, category_threshold=0.3):
     #### W3: classify the query
     #### W3: create filters and boosts
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+
+    candidate_count = 5
+    normalized_query = query.lower()
+    normalized_query_tokens = normalized_query.split()
+    stemmed_tokens = list(map(lambda x: stemmer.stem(x), normalized_query_tokens))
+    print(stemmed_tokens)
+    normalized_query = ' '.join(stemmed_tokens)
+    print(normalized_query)
+    categories, probs = model.predict(normalized_query, k=candidate_count)
+    
+    print(categories)
+    print(probs)
+
+    cat_len = len(categories)
+    filters = None
+    category_list = []
+
+    for i in range(0, cat_len):
+        if probs[i] > category_threshold:
+            curr_cat = categories[i].replace("__label__", "")
+            category_list.append(curr_cat)
+        else:
+            break
+
+    query_obj = create_query(user_query, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir,\
+        source=["name", "shortDescription"], categories=category_list, is_boost=is_boost)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
@@ -210,9 +273,11 @@ if __name__ == "__main__":
                          help='The OpenSearch host name')
     general.add_argument("-p", '--port', type=int, default=9200,
                          help='The OpenSearch port')
+    general.add_argument("-b", '--boost', default=False, action='store_true', help='Determines whether predicted categories should be used as boost.')
+    general.add_argument("-c", '--catthreshold', type=float, default=0.3, help='Probability threshold for categories')
     general.add_argument('--user',
                          help='The OpenSearch admin.  If this is set, the program will prompt for password too. If not set, use default of admin/admin')
-
+    
     args = parser.parse_args()
 
     if len(vars(args)) == 0:
@@ -224,6 +289,10 @@ if __name__ == "__main__":
     if args.user:
         password = getpass()
         auth = (args.user, password)
+
+    index_name = args.index
+    is_boost = args.boost
+    category_threshold = args.catthreshold
 
     base_url = "https://{}:{}/".format(host, port)
     opensearch = OpenSearch(
@@ -238,14 +307,14 @@ if __name__ == "__main__":
         ssl_show_warn=False,
 
     )
-    index_name = args.index
+    
     query_prompt = "\nEnter your query (type 'Exit' to exit or hit ctrl-c):"
     print(query_prompt)
-    for line in fileinput.input():
+    for line in sys.stdin:
         query = line.rstrip()
         if query == "Exit":
             break
-        search(client=opensearch, user_query=query, index=index_name)
+        search(client=opensearch, user_query=query, index=index_name, is_boost=is_boost, category_threshold=category_threshold)
 
         print(query_prompt)
 
