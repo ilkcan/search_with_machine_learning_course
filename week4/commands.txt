@@ -1,0 +1,2 @@
+python index_products.py --reduced -s /workspace/datasets/product_data/products/
+

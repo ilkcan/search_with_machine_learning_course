@@ -13,7 +13,7 @@ stemmer = nltk.stem.PorterStemmer()
 categories_file_name = r'/workspace/datasets/product_data/categories/categories_0001_abcat0010000_to_pcmcat99300050000.xml'
 
 queries_file_name = r'/workspace/datasets/train.csv'
-output_file_name = r'/workspace/datasets/labeled_query_data3.txt'
+output_file_name = r'/workspace/datasets/labeled_query_data.txt'
 
 parser = argparse.ArgumentParser(description='Process arguments.')
 general = parser.add_argument_group("general")
@@ -70,6 +70,7 @@ while num_of_subthreshold_categories > 0:
     df = df_merged[['category', 'query']]
     df = df[df.category.isin(categories)]
     category_counts_df = df.groupby('category').size().reset_index(name='cat_count')
+    
     df_merged = df.merge(category_counts_df, how='left', on='category').merge(parents_df, how='left', on='category')
     num_of_subthreshold_categories = len(category_counts_df[category_counts_df.cat_count < min_queries])
     print("Number of sub-threshold categories: " + str(num_of_subthreshold_categories))
