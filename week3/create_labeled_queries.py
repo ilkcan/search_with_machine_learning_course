@@ -49,8 +49,22 @@ queries_df = pd.read_csv(queries_file_name)[['category', 'query']]
 queries_df = queries_df[queries_df['category'].isin(categories)]
 
 # IMPLEMENT ME: Convert queries to lowercase, and optionally implement other normalization, like stemming.
+queries_df['query'] = queries_df['query'].str.lower()
+queries_df['tokens'] = queries_df['query'].str.split()
+queries_df['stemmed_tokens'] = queries_df['tokens'].apply(lambda x: [stemmer.stem(y) for y in x])
+queries_df['query'] = queries_df['stemmed_tokens'].str.join(' ')
 
 # IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
+queries_df_with_counts = queries_df.groupby('category').size().reset_index(name='count')
+queries_df_merged = queries_df.merge(queries_df_with_counts, how='left', on='category').merge(parents_df, how='left', on='category')
+print("Number of sub-threshold categories: " + str(len(queries_df_with_counts[queries_df_with_counts['count'] < min_queries])))
+while len(queries_df_merged[queries_df_merged['count'] < min_queries]) > 0:
+    queries_df_merged.loc[queries_df_merged['count'] < min_queries, 'category'] = queries_df_merged['parent']
+    queries_df = queries_df_merged[['category', 'query']]
+    queries_df = queries_df[queries_df['category'].isin(categories)]
+    queries_df_with_counts = queries_df.groupby('category').size().reset_index(name='count')
+    queries_df_merged = queries_df.merge(queries_df_with_counts, how='left', on='category').merge(parents_df, how='left', on='category')
+    print("Number of sub-threshold categories: " + str(len(queries_df_with_counts[queries_df_with_counts['count'] < min_queries])))
 
 # Create labels in fastText format.
 queries_df['label'] = '__label__' + queries_df['category']
